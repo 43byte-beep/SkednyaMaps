@@ -1,0 +1,1534 @@
+#import "SKMapView.h"
+#import "SKTileLoader.h"
+#import "SKPinView.h"
+#import "SKBusScheduleViewController.h"
+#import <QuartzCore/QuartzCore.h>
+#import "SKRestaurantLayer.h"
+#import <CoreLocation/CoreLocation.h>
+#import "SKSettingsViewController.h"
+#import "SKAirplaneLayer.h"
+#import "SKBusLayer.h"
+#import "SKLocalization.h"
+
+#define SK_TILE_SIZE 256.0
+#define SK_TEXTURE_CACHE_LIMIT 32
+
+static const GLchar *SKVertexShader =
+    "attribute vec2 aPosition;"
+    "attribute vec2 aTexCoord;"
+    "varying vec2 vTexCoord;"
+    "void main()"
+    "{"
+        "gl_Position = vec4(aPosition, 0.0, 1.0);"
+        "vTexCoord = aTexCoord;"
+    "}";
+
+static const GLchar *SKFragmentShader =
+    "precision mediump float;"
+    "varying vec2 vTexCoord;"
+    "uniform sampler2D uTexture;"
+    "void main()"
+    "{"
+        "gl_FragColor = texture2D(uTexture, vTexCoord);"
+    "}";
+
+@interface SKMapView ()
+- (BOOL)setupGL;
+- (GLuint)compileShader:(const GLchar *)source
+                   type:(GLenum)type;
+- (GLuint)textureFromImage:(UIImage *)image;
+- (void)loadVisibleTileX:(NSInteger)x
+                       y:(NSInteger)y
+                       z:(NSInteger)z;
+- (void)render;
+
+    
+    
+
+
+- (void)pinTapped:(UITapGestureRecognizer *)gesture;
+- (void)updatePinPosition;
+@end
+
+@interface SKMapView () <CLLocationManagerDelegate>
+@end
+
+@implementation SKMapView
+
+
+- (void)whereButtonPressed:(id)sender
+{
+    [_whereButton setTitle:SKL(@"Ищу...")
+                   forState:UIControlStateNormal];
+
+    [_whereLocationManager startUpdatingLocation];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+    didUpdateToLocation:(CLLocation *)location
+    fromLocation:(CLLocation *)oldLocation
+{
+    CLLocationCoordinate2D c =
+        location.coordinate;
+
+    if (c.latitude < -90.0 ||
+        c.latitude > 90.0 ||
+        c.longitude < -180.0 ||
+        c.longitude > 180.0)
+        return;
+
+    double radians =
+        c.latitude * M_PI / 180.0;
+
+    _centerX =
+        (c.longitude + 180.0) / 360.0;
+
+    _centerY =
+        (1.0 -
+         log(tan(radians) +
+             1.0 / cos(radians)) / M_PI) / 2.0;
+
+    [self render];
+
+    [_whereLocationManager stopUpdatingLocation];
+
+    [_whereButton setTitle:SKL(@"Где я")
+                   forState:UIControlStateNormal];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+    didFailWithError:(NSError *)error
+{
+    [_whereLocationManager stopUpdatingLocation];
+
+    [_whereButton setTitle:SKL(@"Где я")
+                   forState:UIControlStateNormal];
+}
+
+- (void)openSettings
+{
+    SKSettingsViewController *settings =
+        [[SKSettingsViewController alloc] init];
+
+    UINavigationController *navigation =
+        [[UINavigationController alloc]
+            initWithRootViewController:settings];
+
+    UIBarButtonItem *done =
+        [[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:
+                UIBarButtonSystemItemDone
+            target:settings
+            action:@selector(dismissSettings)];
+
+    settings.navigationItem.leftBarButtonItem =
+        done;
+
+    [done release];
+
+    UIViewController *presenter =
+        self.window.rootViewController;
+
+    while (presenter.presentedViewController)
+        presenter = presenter.presentedViewController;
+
+    if (presenter)
+    {
+        [presenter presentViewController:
+            navigation
+            animated:YES
+            completion:nil];
+    }
+
+    [navigation release];
+    [settings release];
+}
+
+- (void)settingsChanged:(NSNotification *)notification
+{
+    BOOL airplanes =
+        [SKSettingsViewController showsAirplanes];
+
+    BOOL buses =
+        [SKSettingsViewController showsBuses];
+
+    [_airplaneLayer setEnabled:airplanes];
+
+    [_busLayer setEnabled:buses];
+
+    if (airplanes)
+    {
+        [_airplaneLayer
+            refreshWithCenterX:_centerX
+                      centerY:_centerY
+                         zoom:_zoom];
+    }
+
+    if (buses)
+    {
+        [_busLayer
+            refreshWithCenterX:_centerX
+                      centerY:_centerY
+                         zoom:_zoom];
+    }
+
+    [self render];
+}
+
+- (void)updateAirplaneLayer
+{
+    if (!_airplaneLayer)
+        return;
+
+    [_airplaneLayer
+        refreshWithCenterX:_centerX
+        centerY:_centerY
+        zoom:_zoom];
+}
+
+- (void)updateBusLayer
+{
+    if (!_busLayer)
+        return;
+
+    [_busLayer
+        refreshWithCenterX:_centerX
+        centerY:_centerY
+        zoom:_zoom];
+}
+
+
++ (Class)layerClass
+{
+    return [CAEAGLLayer class];
+}
+
+- (id)initWithFrame:(CGRect)frame
+{
+    self = [super initWithFrame:frame];
+
+    if (self)
+    {
+        self.opaque = YES;
+        self.clipsToBounds = YES;
+
+        _zoom = 10;
+
+        /*
+         * Стартовая позиция.
+         */
+
+        _centerX =
+            (37.6173 + 180.0) / 360.0;
+
+        double latRad =
+            55.7558 * M_PI / 180.0;
+
+        _centerY =
+            (1.0 -
+             log(tan(latRad) +
+                 1.0 / cos(latRad)) / M_PI) / 2.0;
+
+        _hasPin = NO;
+
+        _textureCache =
+            [[NSMutableDictionary alloc] init];
+
+        _textureOrder =
+            [[NSMutableArray alloc] init];
+
+        if (![self setupGL])
+        {
+            [self release];
+            return nil;
+        }
+
+        _pinView =
+            [[SKPinView alloc]
+                initWithFrame:CGRectMake(0, 0, 26, 32)];
+
+        _pinView.hidden = YES;
+
+        [self addSubview:_pinView];
+
+        _pinView.userInteractionEnabled = YES;
+
+        UITapGestureRecognizer *pinTap =
+            [[UITapGestureRecognizer alloc]
+                initWithTarget:self
+                action:@selector(pinTapped:)];
+
+        [_pinView addGestureRecognizer:pinTap];
+        [pinTap release];
+
+        UIPanGestureRecognizer *pan =
+            [[UIPanGestureRecognizer alloc]
+                initWithTarget:self
+                action:@selector(handlePan:)];
+
+        [self addGestureRecognizer:pan];
+
+        UIButton *busButton =
+            [UIButton buttonWithType:
+                UIButtonTypeRoundedRect];
+
+        busButton.frame =
+            CGRectMake(
+                self.bounds.size.width - 112.0,
+                self.bounds.size.height - 48.0,
+                100.0,
+                36.0
+            );
+
+        busButton.autoresizingMask =
+            UIViewAutoresizingFlexibleLeftMargin |
+            UIViewAutoresizingFlexibleTopMargin;
+
+        [busButton setTitle:
+            SKL(@"Расписание")
+             forState:UIControlStateNormal];
+
+        [busButton addTarget:self
+                      action:@selector(openBusSchedule)
+            forControlEvents:
+                UIControlEventTouchUpInside];
+
+        [self addSubview:busButton];
+
+
+
+        _whereButton =
+            [UIButton buttonWithType:
+                UIButtonTypeRoundedRect];
+
+        _whereButton.frame =
+            CGRectMake(
+                8.0,
+                self.bounds.size.height - 48.0,
+                72.0,
+                36.0);
+
+        _whereButton.autoresizingMask =
+            UIViewAutoresizingFlexibleRightMargin |
+            UIViewAutoresizingFlexibleTopMargin;
+
+        [_whereButton setTitle:
+            SKL(@"Где я")
+            forState:UIControlStateNormal];
+
+        [_whereButton addTarget:self
+                         action:@selector(whereButtonPressed:)
+               forControlEvents:UIControlEventTouchUpInside];
+
+        [self addSubview:_whereButton];
+
+        _settingsButton =
+            [UIButton buttonWithType:
+                UIButtonTypeRoundedRect];
+
+        _settingsButton.frame =
+            CGRectMake(
+                8.0,
+                48.0,
+                104.0,
+                36.0);
+
+        _settingsButton.autoresizingMask =
+            UIViewAutoresizingFlexibleRightMargin |
+            UIViewAutoresizingFlexibleBottomMargin;
+
+        [_settingsButton setTitle:
+            SKL(SKL(@"Настройки"))
+            forState:UIControlStateNormal];
+
+        [_settingsButton addTarget:self
+                            action:@selector(openSettings)
+                  forControlEvents:UIControlEventTouchUpInside];
+
+        [self addSubview:_settingsButton];
+
+        _whereLocationManager =
+            [[CLLocationManager alloc] init];
+
+        _whereLocationManager.delegate = self;
+        _whereLocationManager.desiredAccuracy =
+            kCLLocationAccuracyHundredMeters;
+        _whereLocationManager.distanceFilter = 25.0;
+
+        _airplaneLayer =
+            [[SKAirplaneLayer alloc]
+                initWithFrame:self.bounds];
+
+        _airplaneLayer.autoresizingMask =
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
+
+        [self addSubview:_airplaneLayer];
+
+        [_airplaneLayer
+            setEnabled:
+                [SKSettingsViewController
+                    showsAirplanes]];
+
+        _busLayer =
+            [[SKBusLayer alloc]
+                initWithFrame:self.bounds];
+
+        _busLayer.autoresizingMask =
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
+
+        [self addSubview:_busLayer];
+
+        [_busLayer
+            setEnabled:
+                [SKSettingsViewController
+                    showsBuses]];
+
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+            selector:@selector(settingsChanged:)
+            name:SKSettingsChangedNotification
+            object:nil];
+
+        [pan release];
+
+        [self render];
+    }
+    _restaurantLayer =
+        [[SKRestaurantLayer alloc]
+            initWithFrame:self.bounds];
+
+    _restaurantLayer.autoresizingMask =
+        UIViewAutoresizingFlexibleWidth |
+        UIViewAutoresizingFlexibleHeight;
+
+    [self addSubview:_restaurantLayer];
+
+    
+
+    return self;
+}
+
+- (BOOL)setupGL
+{
+    _glContext =
+        [[EAGLContext alloc]
+            initWithAPI:kEAGLRenderingAPIOpenGLES2];
+
+    if (!_glContext)
+        return NO;
+
+    if (![EAGLContext setCurrentContext:_glContext])
+        return NO;
+
+    CAEAGLLayer *layer =
+        (CAEAGLLayer *)self.layer;
+
+    layer.opaque = YES;
+
+    layer.drawableProperties =
+        [NSDictionary dictionaryWithObjectsAndKeys:
+            [NSNumber numberWithBool:NO],
+            kEAGLDrawablePropertyRetainedBacking,
+            kEAGLColorFormatRGBA8,
+            kEAGLDrawablePropertyColorFormat,
+            nil];
+
+    glGenFramebuffers(
+        1,
+        &_framebuffer
+    );
+
+    glBindFramebuffer(
+        GL_FRAMEBUFFER,
+        _framebuffer
+    );
+
+    glGenRenderbuffers(
+        1,
+        &_colorRenderbuffer
+    );
+
+    glBindRenderbuffer(
+        GL_RENDERBUFFER,
+        _colorRenderbuffer
+    );
+
+    [_glContext
+        renderbufferStorage:
+            GL_RENDERBUFFER
+        fromDrawable:layer];
+
+    glFramebufferRenderbuffer(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        _colorRenderbuffer
+    );
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+        GL_FRAMEBUFFER_COMPLETE)
+    {
+        NSLog(@"SKMapView: framebuffer error");
+        return NO;
+    }
+
+    _vertexShader =
+        [self compileShader:
+            SKVertexShader
+            type:GL_VERTEX_SHADER];
+
+    _fragmentShader =
+        [self compileShader:
+            SKFragmentShader
+            type:GL_FRAGMENT_SHADER];
+
+    if (!_vertexShader || !_fragmentShader)
+        return NO;
+
+    _program =
+        glCreateProgram();
+
+    glAttachShader(
+        _program,
+        _vertexShader
+    );
+
+    glAttachShader(
+        _program,
+        _fragmentShader
+    );
+
+    glBindAttribLocation(
+        _program,
+        0,
+        "aPosition"
+    );
+
+    glBindAttribLocation(
+        _program,
+        1,
+        "aTexCoord"
+    );
+
+    glLinkProgram(_program);
+
+    GLint linked = 0;
+
+    glGetProgramiv(
+        _program,
+        GL_LINK_STATUS,
+        &linked
+    );
+
+    if (!linked)
+    {
+        NSLog(@"SKMapView: shader link failed");
+        return NO;
+    }
+
+    _positionAttribute =
+        glGetAttribLocation(
+            _program,
+            "aPosition"
+        );
+
+    _texCoordAttribute =
+        glGetAttribLocation(
+            _program,
+            "aTexCoord"
+        );
+
+    _textureUniform =
+        glGetUniformLocation(
+            _program,
+            "uTexture"
+        );
+
+    /*
+     * Серый placeholder.
+     */
+
+    unsigned char pixel[4] =
+        { 238, 238, 238, 255 };
+
+    glGenTextures(
+        1,
+        &_placeholderTexture
+    );
+
+    glBindTexture(
+        GL_TEXTURE_2D,
+        _placeholderTexture
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MAG_FILTER,
+        GL_LINEAR
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_S,
+        GL_CLAMP_TO_EDGE
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_T,
+        GL_CLAMP_TO_EDGE
+    );
+
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        1,
+        1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        pixel
+    );
+
+    glUseProgram(_program);
+
+    glUniform1i(
+        _textureUniform,
+        0
+    );
+
+    return YES;
+}
+
+- (GLuint)compileShader:(const GLchar *)source
+                   type:(GLenum)type
+{
+    GLuint shader =
+        glCreateShader(type);
+
+    glShaderSource(
+        shader,
+        1,
+        &source,
+        NULL
+    );
+
+    glCompileShader(shader);
+
+    GLint compiled = 0;
+
+    glGetShaderiv(
+        shader,
+        GL_COMPILE_STATUS,
+        &compiled
+    );
+
+    if (!compiled)
+    {
+        char log[512];
+        GLsizei length = 0;
+
+        glGetShaderInfoLog(
+            shader,
+            sizeof(log),
+            &length,
+            log
+        );
+
+        NSLog(
+            @"SKMapView shader error: %s",
+            log
+        );
+
+        glDeleteShader(shader);
+
+        return 0;
+    }
+
+    return shader;
+}
+
+- (GLuint)textureFromImage:(UIImage *)image
+{
+    /*
+     * ВАЖНО:
+     * Используем обычный RGBA.
+     * Без BGRA extension и без дополнительного flip.
+     */
+
+    CGImageRef cgImage =
+        [image CGImage];
+
+    if (!cgImage)
+        return 0;
+
+    size_t width =
+        CGImageGetWidth(cgImage);
+
+    size_t height =
+        CGImageGetHeight(cgImage);
+
+    if (width == 0 || height == 0)
+        return 0;
+
+    size_t bytesPerRow =
+        width * 4;
+
+    void *data =
+        calloc(
+            height,
+            bytesPerRow
+        );
+
+    if (!data)
+        return 0;
+
+    CGColorSpaceRef colorSpace =
+        CGColorSpaceCreateDeviceRGB();
+
+    CGContextRef context =
+        CGBitmapContextCreate(
+            data,
+            width,
+            height,
+            8,
+            bytesPerRow,
+            colorSpace,
+            kCGImageAlphaPremultipliedLast |
+            kCGBitmapByteOrder32Big
+        );
+
+    CGColorSpaceRelease(colorSpace);
+
+    if (!context)
+    {
+        free(data);
+        return 0;
+    }
+
+    /*
+     * Core Graphics пишет изображение сверху вниз,
+     * OpenGL ES ожидает нижнюю строку как начало текстуры.
+     * Поэтому делаем ровно один вертикальный flip.
+     */
+
+    CGContextTranslateCTM(
+        context,
+        0,
+        height
+    );
+
+    CGContextScaleCTM(
+        context,
+        1.0,
+        -1.0
+    );
+
+    CGContextDrawImage(
+        context,
+        CGRectMake(
+            0,
+            0,
+            width,
+            height
+        ),
+        cgImage
+    );
+
+    CGContextRelease(context);
+
+    GLuint texture = 0;
+
+    glGenTextures(
+        1,
+        &texture
+    );
+
+    glBindTexture(
+        GL_TEXTURE_2D,
+        texture
+    );
+
+    glPixelStorei(
+        GL_UNPACK_ALIGNMENT,
+        4
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MAG_FILTER,
+        GL_LINEAR
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_S,
+        GL_CLAMP_TO_EDGE
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_T,
+        GL_CLAMP_TO_EDGE
+    );
+
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        (GLsizei)width,
+        (GLsizei)height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        data
+    );
+
+    free(data);
+
+    return texture;
+}
+
+- (void)loadVisibleTileX:(NSInteger)x
+                       y:(NSInteger)y
+                       z:(NSInteger)z
+{
+    NSString *key =
+        [NSString stringWithFormat:
+            @"%ld/%ld/%ld",
+            (long)z,
+            (long)x,
+            (long)y];
+
+    if ([_textureCache objectForKey:key])
+        return;
+
+    [SKTileLoader
+        loadTileX:x
+        y:y
+        z:z
+        completion:^(UIImage *image)
+    {
+        if (!image)
+            return;
+
+        /*
+         * Completion приходит на main thread.
+         * Явно возвращаем наш GL context.
+         */
+
+        if (![EAGLContext
+                setCurrentContext:_glContext])
+            return;
+
+        /*
+         * Проверяем ещё раз:
+         * пока картинка ехала по сети,
+         * этот тайл мог уже загрузиться.
+         */
+
+        if ([_textureCache objectForKey:key])
+            return;
+
+        GLuint texture =
+            [self textureFromImage:image];
+
+        if (!texture)
+            return;
+
+        [_textureCache
+            setObject:
+                [NSNumber
+                    numberWithUnsignedInt:texture]
+            forKey:key];
+
+        [_textureOrder addObject:key];
+
+        while ([_textureOrder count] >
+               SK_TEXTURE_CACHE_LIMIT)
+        {
+            NSString *oldKey =
+                [_textureOrder objectAtIndex:0];
+
+            NSNumber *oldNumber =
+                [_textureCache objectForKey:oldKey];
+
+            if (oldNumber)
+            {
+                GLuint oldTexture =
+                    [oldNumber unsignedIntValue];
+
+                glDeleteTextures(
+                    1,
+                    &oldTexture
+                );
+
+                [_textureCache
+                    removeObjectForKey:oldKey];
+            }
+
+            [_textureOrder
+                removeObjectAtIndex:0];
+        }
+
+        [self render];
+    }];
+}
+
+
+- (void)updateRestaurantLayer
+{
+    if (!_restaurantLayer)
+        return;
+
+    [_restaurantLayer
+        refreshWithCenterX:_centerX
+        centerY:_centerY
+        zoom:_zoom
+        width:self.bounds.size.width
+        height:self.bounds.size.height];
+}
+
+- (void)render
+{
+    if (!_glContext)
+        return;
+
+    if (![EAGLContext setCurrentContext:_glContext])
+        return;
+
+    glBindFramebuffer(
+        GL_FRAMEBUFFER,
+        _framebuffer
+    );
+
+    glViewport(
+        0,
+        0,
+        (GLsizei)self.bounds.size.width,
+        (GLsizei)self.bounds.size.height
+    );
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+
+    glClearColor(
+        0.93,
+        0.93,
+        0.93,
+        1.0
+    );
+
+    glClear(
+        GL_COLOR_BUFFER_BIT
+    );
+
+    glUseProgram(_program);
+
+    glActiveTexture(
+        GL_TEXTURE0
+    );
+
+    glUniform1i(
+        _textureUniform,
+        0
+    );
+
+    double worldSize =
+        (double)(1 << _zoom) *
+        SK_TILE_SIZE;
+
+    double centerPx =
+        _centerX * worldSize;
+
+    double centerPy =
+        _centerY * worldSize;
+
+    NSInteger centerTileX =
+        (NSInteger)floor(
+            centerPx / SK_TILE_SIZE
+        );
+
+    NSInteger centerTileY =
+        (NSInteger)floor(
+            centerPy / SK_TILE_SIZE
+        );
+
+    CGFloat offsetX =
+        self.bounds.size.width / 2.0 -
+        (centerPx -
+         centerTileX * SK_TILE_SIZE);
+
+    CGFloat offsetY =
+        self.bounds.size.height / 2.0 -
+        (centerPy -
+         centerTileY * SK_TILE_SIZE);
+
+    NSInteger tileCount =
+        1 << _zoom;
+
+    /*
+     * Запрашиваем только видимые 9 тайлов.
+     */
+
+    for (NSInteger ty = -1;
+         ty <= 1;
+         ty++)
+    {
+        for (NSInteger tx = -1;
+             tx <= 1;
+             tx++)
+        {
+            NSInteger tileX =
+                centerTileX + tx;
+
+            NSInteger tileY =
+                centerTileY + ty;
+
+            if (tileY < 0 ||
+                tileY >= tileCount)
+                continue;
+
+            NSInteger normalizedX =
+                tileX % tileCount;
+
+            if (normalizedX < 0)
+                normalizedX += tileCount;
+
+            [self loadVisibleTileX:
+                normalizedX
+                y:tileY
+                z:_zoom];
+        }
+    }
+
+    /*
+     * Рисуем.
+     */
+
+    for (NSInteger ty = -1;
+         ty <= 1;
+         ty++)
+    {
+        for (NSInteger tx = -1;
+             tx <= 1;
+             tx++)
+        {
+            NSInteger tileX =
+                centerTileX + tx;
+
+            NSInteger tileY =
+                centerTileY + ty;
+
+            if (tileY < 0 ||
+                tileY >= tileCount)
+                continue;
+
+            NSInteger normalizedX =
+                tileX % tileCount;
+
+            if (normalizedX < 0)
+                normalizedX += tileCount;
+
+            NSString *key =
+                [NSString stringWithFormat:
+                    @"%ld/%ld/%ld",
+                    (long)_zoom,
+                    (long)normalizedX,
+                    (long)tileY];
+
+            NSNumber *number =
+                [_textureCache objectForKey:key];
+
+            GLuint texture =
+                _placeholderTexture;
+
+            if (number)
+                texture =
+                    [number unsignedIntValue];
+
+            CGFloat left =
+                offsetX +
+                tx * SK_TILE_SIZE;
+
+            CGFloat top =
+                offsetY +
+                ty * SK_TILE_SIZE;
+
+            CGFloat right =
+                left + SK_TILE_SIZE;
+
+            CGFloat bottom =
+                top + SK_TILE_SIZE;
+
+            GLfloat x1 =
+                (GLfloat)(
+                    (left /
+                     self.bounds.size.width) *
+                    2.0 - 1.0
+                );
+
+            GLfloat x2 =
+                (GLfloat)(
+                    (right /
+                     self.bounds.size.width) *
+                    2.0 - 1.0
+                );
+
+            GLfloat y1 =
+                (GLfloat)(
+                    1.0 -
+                    (top /
+                     self.bounds.size.height) *
+                    2.0
+                );
+
+            GLfloat y2 =
+                (GLfloat)(
+                    1.0 -
+                    (bottom /
+                     self.bounds.size.height) *
+                    2.0
+                );
+
+            GLfloat vertices[] =
+            {
+                x1, y2,
+                x2, y2,
+                x1, y1,
+                x2, y1
+            };
+
+            /*
+             * Текстура хранится в обычном RGBA.
+             * Здесь не делаем дополнительного переворота.
+             */
+
+            GLfloat texCoords[] =
+            {
+                0.0, 0.0,
+                1.0, 0.0,
+                0.0, 1.0,
+                1.0, 1.0
+            };
+
+            glBindTexture(
+                GL_TEXTURE_2D,
+                texture
+            );
+
+            glEnableVertexAttribArray(
+                _positionAttribute
+            );
+
+            glVertexAttribPointer(
+                _positionAttribute,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                0,
+                vertices
+            );
+
+            glEnableVertexAttribArray(
+                _texCoordAttribute
+            );
+
+            glVertexAttribPointer(
+                _texCoordAttribute,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                0,
+                texCoords
+            );
+
+            glDrawArrays(
+                GL_TRIANGLE_STRIP,
+                0,
+                4
+            );
+        }
+    }
+
+    glBindRenderbuffer(
+        GL_RENDERBUFFER,
+        _colorRenderbuffer
+    );
+
+    [_glContext
+        presentRenderbuffer:
+            GL_RENDERBUFFER];
+}
+
+- (void)openBusSchedule
+{
+    SKBusScheduleViewController *schedule =
+        [[SKBusScheduleViewController alloc]
+            init];
+
+    UINavigationController *navigation =
+        [[UINavigationController alloc]
+            initWithRootViewController:schedule];
+
+    UIBarButtonItem *done =
+        [[UIBarButtonItem alloc]
+            initWithBarButtonSystemItem:
+                UIBarButtonSystemItemDone
+            target:schedule
+            action:@selector(closeSchedule)];
+
+    schedule.navigationItem.leftBarButtonItem =
+        done;
+
+    [done release];
+
+    UIViewController *root =
+        self.window.rootViewController;
+
+    if (root)
+    {
+        [root presentViewController:
+            navigation
+            animated:YES
+            completion:nil];
+    }
+
+    [navigation release];
+    [schedule release];
+}
+
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+
+    _whereButton.frame =
+        CGRectMake(
+            8.0,
+            self.bounds.size.height - 48.0,
+            72.0,
+            36.0);
+
+    _settingsButton.frame =
+        CGRectMake(
+            8.0,
+            48.0,
+            104.0,
+            36.0);
+
+    [self bringSubviewToFront:_whereButton];
+    [self bringSubviewToFront:_settingsButton];
+
+
+
+    if (!_glContext)
+        return;
+
+    [EAGLContext setCurrentContext:_glContext];
+
+    CAEAGLLayer *layer =
+        (CAEAGLLayer *)self.layer;
+
+    glBindRenderbuffer(
+        GL_RENDERBUFFER,
+        _colorRenderbuffer
+    );
+
+    [_glContext
+        renderbufferStorage:
+            GL_RENDERBUFFER
+        fromDrawable:layer];
+
+    [self render];
+    [self updateRestaurantLayer];
+}
+
+- (void)setZoom:(NSInteger)zoom
+{
+    if (zoom < 1)
+        zoom = 1;
+
+    if (zoom > 19)
+        zoom = 19;
+
+    if (_zoom == zoom)
+        return;
+
+    _zoom = zoom;
+
+    [self updatePinPosition];
+    [self render];
+    [self updateRestaurantLayer];
+}
+
+- (void)zoomIn
+{
+    [self setZoom:_zoom + 1];
+}
+
+- (void)zoomOut
+{
+    [self setZoom:_zoom - 1];
+}
+
+- (void)setCenterLatitude:(double)latitude
+                longitude:(double)longitude
+{
+    _centerX =
+        (longitude + 180.0) / 360.0;
+
+    double latRad =
+        latitude * M_PI / 180.0;
+
+    _centerY =
+        (1.0 -
+         log(tan(latRad) +
+             1.0 / cos(latRad)) / M_PI) / 2.0;
+
+    [self updatePinPosition];
+    [self render];
+    [self updateRestaurantLayer];
+}
+
+- (void)setPinLatitude:(double)latitude
+             longitude:(double)longitude
+{
+    _pinLatitude = latitude;
+    _pinLongitude = longitude;
+
+    _pinX =
+        (longitude + 180.0) / 360.0;
+
+    double latRad =
+        latitude * M_PI / 180.0;
+
+    _pinY =
+        (1.0 -
+         log(tan(latRad) +
+             1.0 / cos(latRad)) / M_PI) / 2.0;
+
+    _hasPin = YES;
+
+    [self updatePinPosition];
+}
+
+- (void)pinTapped:(UITapGestureRecognizer *)gesture
+{
+    if (!_hasPin)
+        return;
+
+    NSString *message =
+        [NSString stringWithFormat:
+            @"Широта: %.6f\nДолгота: %.6f",
+            _pinLatitude,
+            _pinLongitude];
+
+    UIAlertView *alert =
+        [[UIAlertView alloc]
+            initWithTitle:@"Местоположение"
+                  message:message
+                 delegate:nil
+        cancelButtonTitle:@"OK"
+        otherButtonTitles:nil];
+
+    [alert show];
+    [alert release];
+}
+
+- (void)updatePinPosition
+{
+    if (!_hasPin)
+        return;
+
+    double worldSize =
+        (double)(1 << _zoom) *
+        SK_TILE_SIZE;
+
+    double centerPx =
+        _centerX * worldSize;
+
+    double centerPy =
+        _centerY * worldSize;
+
+    double pinPx =
+        _pinX * worldSize;
+
+    double pinPy =
+        _pinY * worldSize;
+
+    double dx =
+        pinPx - centerPx;
+
+    if (dx > worldSize / 2.0)
+        dx -= worldSize;
+
+    if (dx < -worldSize / 2.0)
+        dx += worldSize;
+
+    double dy =
+        pinPy - centerPy;
+
+    CGFloat screenX =
+        self.bounds.size.width / 2.0 + dx;
+
+    CGFloat screenY =
+        self.bounds.size.height / 2.0 + dy;
+
+    BOOL visible =
+        screenX > -40.0 &&
+        screenX < self.bounds.size.width + 40.0 &&
+        screenY > -40.0 &&
+        screenY < self.bounds.size.height + 40.0;
+
+    _pinView.hidden = !visible;
+
+    if (visible)
+    {
+        _pinView.frame =
+            CGRectMake(
+                screenX - 13.0,
+                screenY - 30.0,
+                26.0,
+                32.0
+            );
+    }
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)gesture
+{
+    static CGPoint lastPoint;
+
+    CGPoint point =
+        [gesture translationInView:self];
+
+    if (gesture.state ==
+        UIGestureRecognizerStateBegan)
+    {
+        lastPoint = point;
+        return;
+    }
+
+    CGFloat dx =
+        point.x - lastPoint.x;
+
+    CGFloat dy =
+        point.y - lastPoint.y;
+
+    lastPoint = point;
+
+    double worldSize =
+        (double)(1 << _zoom) *
+        SK_TILE_SIZE;
+
+    _centerX -=
+        dx / worldSize;
+
+    _centerY -=
+        dy / worldSize;
+
+    if (_centerX < 0.0)
+        _centerX += 1.0;
+
+    if (_centerX >= 1.0)
+        _centerX -= 1.0;
+
+    if (_centerY < 0.0)
+        _centerY = 0.0;
+
+    if (_centerY > 1.0)
+        _centerY = 1.0;
+
+    [self updatePinPosition];
+    [self render];
+    [self updateRestaurantLayer];
+}
+
+- (void)dealloc
+{
+    if (_glContext)
+        [EAGLContext setCurrentContext:_glContext];
+
+    for (NSString *key in _textureCache)
+    {
+        GLuint texture =
+            [[_textureCache objectForKey:key]
+                unsignedIntValue];
+
+        if (texture)
+        {
+            glDeleteTextures(
+                1,
+                &texture
+            );
+        }
+    }
+
+    if (_placeholderTexture)
+    {
+        glDeleteTextures(
+            1,
+            &_placeholderTexture
+        );
+    }
+
+    if (_program)
+        glDeleteProgram(_program);
+
+    if (_vertexShader)
+        glDeleteShader(_vertexShader);
+
+    if (_fragmentShader)
+        glDeleteShader(_fragmentShader);
+
+    if (_colorRenderbuffer)
+    {
+        glDeleteRenderbuffers(
+            1,
+            &_colorRenderbuffer
+        );
+    }
+
+    if (_framebuffer)
+    {
+        glDeleteFramebuffers(
+            1,
+            &_framebuffer
+        );
+    }
+
+    [_textureCache release];
+    [_textureOrder release];
+    [_pinView release];
+    [_glContext release];
+
+    [_restaurantLayer release];
+
+    
+    [[NSNotificationCenter defaultCenter]
+        removeObserver:self];
+
+    [_whereLocationManager stopUpdatingLocation];
+    [_whereLocationManager release];
+
+    [_airplaneLayer release];
+    [_busLayer release];
+
+[super dealloc];
+}
+
+@end

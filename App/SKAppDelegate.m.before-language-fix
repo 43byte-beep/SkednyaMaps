@@ -1,0 +1,263 @@
+#import "SKAppDelegate.h"
+#import "SKMapView.h"
+#import "SKSearch.h"
+#import "SKLocalization.h"
+
+@implementation SKAppDelegate
+
+@synthesize window = _window;
+
+- (BOOL)application:(UIApplication *)application
+    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+{
+    _window =
+        [[UIWindow alloc]
+            initWithFrame:[[UIScreen mainScreen] bounds]];
+
+    UIViewController *controller =
+        [[UIViewController alloc] init];
+
+    controller.view.backgroundColor =
+        [UIColor whiteColor];
+
+    UINavigationBar *bar =
+        [[UINavigationBar alloc]
+            initWithFrame:CGRectMake(0, 20, 320, 44)];
+
+    UINavigationItem *item =
+        [[UINavigationItem alloc]
+            initWithTitle:@"скеднЯ Карты"];
+
+    [bar pushNavigationItem:item animated:NO];
+
+    [controller.view addSubview:bar];
+
+    [item release];
+    [bar release];
+
+    UISearchBar *search =
+        [[UISearchBar alloc]
+            initWithFrame:CGRectMake(0, 64, 320, 44)];
+
+    search.placeholder =
+        @"Найти место или адрес";
+
+    search.delegate = self;
+
+    [controller.view addSubview:search];
+    [search release];
+
+    SKMapView *map =
+        [[SKMapView alloc]
+            initWithFrame:CGRectMake(0, 108, 320, 372)];
+
+    map.tag = 1001;
+
+    [map setZoom:10];
+
+    /*
+     * Нормальный запасной центр,
+     * а не 0°,0° возле Ганы.
+     */
+
+    [map setCenterLatitude:55.7558
+                 longitude:37.6173];
+
+    [controller.view addSubview:map];
+
+    UIButton *plus =
+        [UIButton buttonWithType:UIButtonTypeRoundedRect];
+
+    plus.frame =
+        CGRectMake(260, 125, 50, 44);
+
+    [plus setTitle:@"+"
+          forState:UIControlStateNormal];
+
+    plus.titleLabel.font =
+        [UIFont boldSystemFontOfSize:24];
+
+    [plus addTarget:map
+             action:@selector(zoomIn)
+   forControlEvents:UIControlEventTouchUpInside];
+
+    [controller.view addSubview:plus];
+
+    UIButton *minus =
+        [UIButton buttonWithType:UIButtonTypeRoundedRect];
+
+    minus.frame =
+        CGRectMake(260, 175, 50, 44);
+
+    [minus setTitle:@"−"
+          forState:UIControlStateNormal];
+
+    minus.titleLabel.font =
+        [UIFont boldSystemFontOfSize:24];
+
+    [minus addTarget:map
+              action:@selector(zoomOut)
+    forControlEvents:UIControlEventTouchUpInside];
+
+    [controller.view addSubview:minus];
+
+    [map release];
+
+    _window.rootViewController =
+        controller;
+
+    [_window makeKeyAndVisible];
+
+    [controller release];
+
+    /*
+     * Геолокация.
+     */
+
+    _locationManager =
+        [[CLLocationManager alloc] init];
+
+    _locationManager.delegate = self;
+
+    _locationManager.desiredAccuracy =
+        kCLLocationAccuracyBest;
+
+    _locationManager.distanceFilter =
+        20.0;
+
+    if ([CLLocationManager locationServicesEnabled])
+        [_locationManager startUpdatingLocation];
+
+    return YES;
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+     didUpdateLocations:(NSArray *)locations
+{
+    if (_didSearch)
+        return;
+
+    CLLocation *location =
+        [locations lastObject];
+
+    if (!location)
+        return;
+
+    CLLocationCoordinate2D coordinate =
+        location.coordinate;
+
+    double accuracy =
+        location.horizontalAccuracy;
+
+    if (accuracy < 0.0)
+        return;
+
+    _lastLatitude =
+        coordinate.latitude;
+
+    _lastLongitude =
+        coordinate.longitude;
+
+    _hasLocation = YES;
+
+    UIViewController *controller =
+        self.window.rootViewController;
+
+    SKMapView *map =
+        (SKMapView *)
+            [controller.view viewWithTag:1001];
+
+    if (!map)
+        return;
+
+    /*
+     * Даже грубая позиция лучше, чем 0°,0°.
+     * По мере улучшения GPS центр уточняется.
+     */
+
+    if (accuracy <= 2000.0)
+    {
+        [map setCenterLatitude:_lastLatitude
+                     longitude:_lastLongitude];
+
+        [map setPinLatitude:_lastLatitude
+                  longitude:_lastLongitude];
+
+        [map setZoom:15];
+    }
+
+    /*
+     * Когда GPS уже достаточно точный,
+     * перестаём постоянно двигать карту.
+     */
+
+    if (accuracy <= 100.0)
+    {
+        [_locationManager stopUpdatingLocation];
+    }
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar
+{
+    [searchBar resignFirstResponder];
+
+    _didSearch = YES;
+
+    [_locationManager stopUpdatingLocation];
+
+    NSString *query =
+        [searchBar.text
+            stringByTrimmingCharactersInSet:
+                [NSCharacterSet
+                    whitespaceAndNewlineCharacterSet]];
+
+    if ([query length] == 0)
+        return;
+
+    [SKSearch search:query
+          completion:^(double latitude,
+                      double longitude,
+                      NSString *name)
+    {
+        UIViewController *controller =
+            self.window.rootViewController;
+
+        SKMapView *map =
+            (SKMapView *)
+                [controller.view viewWithTag:1001];
+
+        if (map)
+        {
+            [map setCenterLatitude:latitude
+                         longitude:longitude];
+
+            [map setZoom:15];
+
+            [map setPinLatitude:latitude
+                      longitude:longitude];
+        }
+
+        NSLog(@"SKSearch: %@ (%f, %f)",
+              name,
+              latitude,
+              longitude);
+    }];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+       didFailWithError:(NSError *)error
+{
+    NSLog(@"SKLocation error: %@", error);
+}
+
+- (void)dealloc
+{
+    [_locationManager stopUpdatingLocation];
+    [_locationManager release];
+
+    [_window release];
+
+    [super dealloc];
+}
+
+@end

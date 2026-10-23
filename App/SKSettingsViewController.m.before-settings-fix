@@ -1,0 +1,190 @@
+#import "SKSettingsViewController.h"
+#import "SKLocalization.h"
+
+NSString * const SKSettingsChangedNotification =
+    @"SKSettingsChangedNotification";
+
+static NSString * const SKShowAirplanesKey =
+    @"SKShowAirplanes";
+
+static NSString * const SKShowBusesKey =
+    @"SKShowBuses";
+
+@implementation SKSettingsViewController
+
++ (BOOL)showsAirplanes
+{
+    NSUserDefaults *d =
+        [NSUserDefaults standardUserDefaults];
+
+    if ([d objectForKey:SKShowAirplanesKey] == nil)
+        return YES;
+
+    return [d boolForKey:SKShowAirplanesKey];
+}
+
++ (BOOL)showsBuses
+{
+    NSUserDefaults *d =
+        [NSUserDefaults standardUserDefaults];
+
+    if ([d objectForKey:SKShowBusesKey] == nil)
+        return YES;
+
+    return [d boolForKey:SKShowBusesKey];
+}
+
+- (id)init
+{
+    self =
+        [super initWithStyle:UITableViewStyleGrouped];
+
+    if (self)
+        self.title = @"Настройки";
+
+    self.navigationItem.rightBarButtonItem =
+        [[[UIBarButtonItem alloc]
+            initWithTitle:SKL(@"Язык")
+            style:UIBarButtonItemStyleBordered
+            target:self
+            action:@selector(sk_showLanguagePicker:)] autorelease];
+
+
+    return self;
+}
+
+- (NSInteger)numberOfRowsInSection:(NSInteger)section
+{
+    return 2;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
+{
+    return 1;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    static NSString *identifier = @"SettingsCell";
+
+    UITableViewCell *cell =
+        [tableView dequeueReusableCellWithIdentifier:
+            identifier];
+
+    if (!cell)
+    {
+        cell =
+            [[[UITableViewCell alloc]
+                initWithStyle:UITableViewCellStyleDefault
+                reuseIdentifier:identifier]
+                autorelease];
+    }
+
+    UISwitch *toggle =
+        [[[UISwitch alloc] initWithFrame:CGRectZero]
+            autorelease];
+
+    toggle.tag = indexPath.row + 1;
+
+    if (indexPath.row == 0)
+    {
+        cell.textLabel.text =
+            @"Показывать самолёты";
+
+        toggle.on =
+            [SKSettingsViewController showsAirplanes];
+    }
+    else
+    {
+        cell.textLabel.text =
+            @"Показывать автобусы";
+
+        toggle.on =
+            [SKSettingsViewController showsBuses];
+    }
+
+    [toggle addTarget:self
+               action:@selector(settingChanged:)
+     forControlEvents:UIControlEventValueChanged];
+
+    cell.accessoryView = toggle;
+
+    return cell;
+}
+
+- (void)settingChanged:(UISwitch *)sender
+{
+    NSUserDefaults *d =
+        [NSUserDefaults standardUserDefaults];
+
+    if (sender.tag == 1)
+    {
+        [d setBool:sender.on
+            forKey:SKShowAirplanesKey];
+    }
+    else
+    {
+        [d setBool:sender.on
+            forKey:SKShowBusesKey];
+    }
+
+    [d synchronize];
+
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:SKSettingsChangedNotification
+        object:nil];
+}
+
+- (void)dismissSettings
+{
+    [self dismissViewControllerAnimated:YES
+                             completion:nil];
+}
+
+@end
+
+
+@interface SKSettingsViewController (SKLanguagePicker) <UIActionSheetDelegate>
+@end
+
+@implementation SKSettingsViewController (SKLanguagePicker)
+
+- (void)sk_showLanguagePicker:(id)sender
+{
+    UIActionSheet *sheet =
+        [[[UIActionSheet alloc]
+            initWithTitle:SKL(@"Выберите язык")
+            delegate:self
+            cancelButtonTitle:SKL(@"Отмена")
+            destructiveButtonTitle:nil
+            otherButtonTitles:@"Русский", @"English", nil]
+            autorelease];
+
+    [sheet showInView:self.view];
+}
+
+- (void)actionSheet:(UIActionSheet *)actionSheet
+clickedButtonAtIndex:(NSInteger)buttonIndex
+{
+    if (buttonIndex == 0) {
+        SKSetLanguageCode(@"ru");
+    } else if (buttonIndex == 1) {
+        SKSetLanguageCode(@"en");
+    } else {
+        return;
+    }
+
+    UIAlertView *alert =
+        [[[UIAlertView alloc]
+            initWithTitle:SKL(@"Язык изменён")
+            message:SKL(@"Перезапустите Skednya Maps, чтобы применить язык.")
+            delegate:nil
+            cancelButtonTitle:@"OK"
+            otherButtonTitles:nil]
+            autorelease];
+
+    [alert show];
+}
+
+@end

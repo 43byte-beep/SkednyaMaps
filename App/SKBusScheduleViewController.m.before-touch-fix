@@ -1,0 +1,381 @@
+#import "SKBusScheduleViewController.h"
+#import "SKLocalization.h"
+
+@interface SKBusScheduleViewController ()
+{
+    NSArray *_routes;
+}
+@end
+
+@implementation SKBusScheduleViewController
+
+- (id)init
+{
+    self =
+        [super initWithStyle:
+            UITableViewStylePlain];
+
+    if (self)
+    {
+        self.title = @"Расписание";
+
+        /*
+         * Официальный перечень городских маршрутов
+         * Ульяновска.
+         *
+         * Времена отправления зашиты только для №28,
+         * чтобы не выдавать старые данные остальных
+         * маршрутов за актуальные.
+         */
+
+        _routes =
+            [[NSArray alloc] initWithObjects:
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"1", @"number",
+                    @"Аэропорт имени Карамзина — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"10", @"number",
+                    @"Пр-кт Дружбы Народов — Автозавод — ул. Крефельдская",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"13с", @"number",
+                    @"Автовокзал Центральный — д. Погребы",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"20", @"number",
+                    @"Кондитерская фабрика «Волжанка» — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"26с", @"number",
+                    @"Центробанк — СНТ «Рассвет»",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"28", @"number",
+                    @"проспект Созидателей — ул. Крефельдская",
+                    @"name",
+                    @"yes", @"hasSchedule",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"30", @"number",
+                    @"Центробанк — пр-т Врача Сурова",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"31", @"number",
+                    @"Центробанк — с. Карлинское",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"35", @"number",
+                    @"Центробанк — пр-т Врача Сурова",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"46", @"number",
+                    @"ул. Корунковой — ул. Якурнова",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"50", @"number",
+                    @"ул. Ефремова — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"55", @"number",
+                    @"Бульвар Архитекторов — ул. Крефельдская",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"59", @"number",
+                    @"Кондитерская фабрика — ул. Подлесная",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"66", @"number",
+                    @"Центробанк — с. Арское — д. Погребы",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"73", @"number",
+                    @"ул. Мостостроителей — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"74", @"number",
+                    @"ул. Профсоюзная — УлГТУ",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"78", @"number",
+                    @"УлГТУ — 4-я проходная Авиастар-СП",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"84", @"number",
+                    @"ул. Якурнова — памятник Нариманову",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"87", @"number",
+                    @"д. Кувшиновка — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"88", @"number",
+                    @"с. Луговое — Центробанк",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"90", @"number",
+                    @"СНТ «Юбилейное» — ул. Хлебозаводская",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"91", @"number",
+                    @"Центробанк — с. Баратаевка",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"92", @"number",
+                    @"19-й микрорайон — с. Лесная Долина — с. Отрада",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"93", @"number",
+                    @"ул. Шигаева — Центробанк — ул. Шигаева",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"94", @"number",
+                    @"ул. Камышинская — ул. Ульяны Громовой",
+                    @"name",
+                    nil],
+
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    @"95", @"number",
+                    @"с. Подгородная Каменка — Пушкаревское кольцо",
+                    @"name",
+                    nil],
+
+                nil];
+    }
+
+    return self;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section
+{
+    return [_routes count];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    static NSString *identifier =
+        @"BusRouteCell";
+
+    UITableViewCell *cell =
+        [tableView
+            dequeueReusableCellWithIdentifier:
+                identifier];
+
+    if (!cell)
+    {
+        cell =
+            [[[UITableViewCell alloc]
+                initWithStyle:
+                    UITableViewCellStyleSubtitle
+                reuseIdentifier:
+                    identifier]
+                autorelease];
+
+        cell.accessoryType =
+            UITableViewCellAccessoryDisclosureIndicator;
+    }
+
+    NSDictionary *route =
+        [_routes objectAtIndex:indexPath.row];
+
+    cell.textLabel.text =
+        [NSString stringWithFormat:
+            @"№ %@",
+            [route objectForKey:@"number"]];
+
+    cell.detailTextLabel.text =
+        [route objectForKey:@"name"];
+
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+    didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    NSDictionary *route =
+        [_routes objectAtIndex:indexPath.row];
+
+    NSString *number =
+        [route objectForKey:@"number"];
+
+    if (![number isEqualToString:@"28"])
+    {
+        UIAlertView *alert =
+            [[UIAlertView alloc]
+                initWithTitle:
+                    [NSString stringWithFormat:
+                        @"Маршрут №%@",
+                        number]
+                message:
+                    @"В этом релизе для этого маршрута "
+                     "показывается название и маршрут. "
+                     "Актуальное время отправления ещё "
+                     "не добавлено, чтобы не показывать "
+                     "устаревшее расписание."
+                delegate:nil
+                cancelButtonTitle:@"OK"
+                otherButtonTitles:nil];
+
+        [alert show];
+        [alert release];
+
+        [tableView deselectRowAtIndexPath:
+            indexPath
+            animated:YES];
+
+        return;
+    }
+
+    [self showRoute28];
+
+    [tableView deselectRowAtIndexPath:
+        indexPath
+        animated:YES];
+}
+
+- (void)showRoute28
+{
+    UIViewController *controller =
+        [[UIViewController alloc] init];
+
+    controller.title =
+        @"№28";
+
+    UITextView *text =
+        [[UITextView alloc]
+            initWithFrame:
+                controller.view.bounds];
+
+    text.autoresizingMask =
+        UIViewAutoresizingFlexibleWidth |
+        UIViewAutoresizingFlexibleHeight;
+
+    text.editable = NO;
+    text.font =
+        [UIFont systemFontOfSize:15];
+
+    text.text =
+        @"Маршрут №28\n"
+         @"проспект Созидателей — ул. Крефельдская\n"
+         "\n"
+         "БУДНИ — Созидатели → Крефельдская\n"
+         "05:25  05:50  06:15  06:40\n"
+         "06:55  07:10  07:25  07:40  07:55\n"
+         "08:10  08:25  08:40  09:00  09:20\n"
+         "09:45  10:10  10:35  11:05  11:40\n"
+         "12:40  13:30  15:05  15:25  15:40\n"
+         "15:55  16:10  16:25  16:40  16:55\n"
+         "17:10  17:25  17:45  18:05  18:25\n"
+         "18:50  19:15  19:40  20:10  20:40\n"
+         "21:20\n"
+         "\n"
+         "ВЫХОДНЫЕ — Созидатели → Крефельдская\n"
+         "06:10  06:50  07:25  08:00  09:00\n"
+         "10:00  11:00  12:00  13:00  14:00\n"
+         "15:00  15:50  16:40  17:30  18:45\n"
+         "20:10\n"
+         "\n"
+         "Крефельдская → Созидатели\n"
+         "\n"
+         "БУДНИ\n"
+         "05:20  05:45  06:05  06:25  06:45\n"
+         "07:05  07:20  07:35  07:50  08:05\n"
+         "08:25  08:45  09:10  09:30  09:55\n"
+         "10:30  11:10  11:35  12:00  12:25\n"
+         "12:55  13:30  14:00  14:30  14:55\n"
+         "15:20  15:40  16:00  16:15  16:35\n"
+         "16:50  17:10  17:30  17:50  18:10\n"
+         "18:25  18:45  19:05  19:20  19:40\n"
+         "20:20  21:10\n"
+         "\n"
+         "ВЫХОДНЫЕ\n"
+         "06:00  06:40  07:20  08:00  08:40\n"
+         "09:25  10:10  11:00  12:00  13:00\n"
+         "14:00  15:00  16:00  16:50  17:40\n"
+         "18:25  19:20  20:30\n"
+         "\n"
+         "ВНИМАНИЕ\n"
+         "Официальный транспортный портал сообщает "
+         "о временной схеме движения маршрута №28 "
+         "с 01.09.2026.\n"
+         "\n"
+         "Источник времени: публичные данные маршрута "
+         "№28, обновление 03.07.2026.\n"
+         "\n"
+         "Официальный источник изменений:\n"
+         "МКУ «Организатор пассажирских перевозок».";
+
+    [controller.view addSubview:text];
+
+    [self.navigationController
+        pushViewController:controller
+        animated:YES];
+
+    [text release];
+    [controller release];
+}
+
+- (void)closeSchedule
+{
+    [self dismissViewControllerAnimated:YES
+                             completion:nil];
+}
+
+- (void)dealloc
+{
+    [_routes release];
+
+    [super dealloc];
+}
+
+@end

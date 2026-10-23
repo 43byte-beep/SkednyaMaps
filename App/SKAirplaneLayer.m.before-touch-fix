@@ -1,0 +1,385 @@
+#import "SKAirplaneLayer.h"
+#import "SKLocalization.h"
+
+#define SK_AIRCRAFT_MIN_ZOOM 5
+#define SK_AIRCRAFT_MAX_COUNT 50
+
+@implementation SKAirplaneLayer
+
+- (id)initWithFrame:(CGRect)frame
+{
+    self = [super initWithFrame:frame];
+
+    if (self)
+    {
+        self.backgroundColor = [UIColor clearColor];
+        self.userInteractionEnabled = NO;
+
+        _aircraft = [[NSArray alloc] init];
+
+        _enabled = YES;
+        _requestInFlight = NO;
+        _lastRequestTime = 0.0;
+    }
+
+    return self;
+}
+
+- (void)setEnabled:(BOOL)enabled
+{
+    _enabled = enabled;
+
+    if (!_enabled)
+    {
+        self.hidden = YES;
+        [self clearMarkers];
+    }
+    else
+    {
+        self.hidden = NO;
+        [self updateMarkers];
+    }
+}
+
+- (BOOL)isEnabled
+{
+    return _enabled;
+}
+
+- (double)xForLongitude:(double)longitude
+{
+    return (longitude + 180.0) / 360.0;
+}
+
+- (double)yForLatitude:(double)latitude
+{
+    double radians =
+        latitude * M_PI / 180.0;
+
+    return
+        (1.0 -
+         log(tan(radians) +
+             1.0 / cos(radians)) / M_PI) / 2.0;
+}
+
+- (void)clearMarkers
+{
+    NSArray *views =
+        [[self.subviews copy] autorelease];
+
+    for (UIView *view in views)
+        [view removeFromSuperview];
+}
+
+- (void)updateMarkers
+{
+    if (!_enabled ||
+        _zoom < SK_AIRCRAFT_MIN_ZOOM)
+    {
+        self.hidden = YES;
+        [self clearMarkers];
+        return;
+    }
+
+    self.hidden = NO;
+
+    [self clearMarkers];
+
+    double worldSize =
+        (double)(1 << _zoom) * 256.0;
+
+    CGFloat width =
+        self.bounds.size.width;
+
+    CGFloat height =
+        self.bounds.size.height;
+
+    for (NSUInteger i = 0;
+         i < [_aircraft count] &&
+         i < SK_AIRCRAFT_MAX_COUNT;
+         i++)
+    {
+        NSDictionary *plane =
+            [_aircraft objectAtIndex:i];
+
+        double lat =
+            [[plane objectForKey:@"lat"] doubleValue];
+
+        double lon =
+            [[plane objectForKey:@"lon"] doubleValue];
+
+        double x =
+            [self xForLongitude:lon];
+
+        double y =
+            [self yForLatitude:lat];
+
+        double dx = x - _centerX;
+
+        if (dx > 0.5)
+            dx -= 1.0;
+
+        if (dx < -0.5)
+            dx += 1.0;
+
+        double dy = y - _centerY;
+
+        CGFloat screenX =
+            width / 2.0 +
+            dx * worldSize;
+
+        CGFloat screenY =
+            height / 2.0 +
+            dy * worldSize;
+
+        if (screenX < -20.0 ||
+            screenX > width + 20.0 ||
+            screenY < -20.0 ||
+            screenY > height + 20.0)
+            continue;
+
+        UIButton *marker =
+            [UIButton buttonWithType:
+                UIButtonTypeCustom];
+
+        marker.frame =
+            CGRectMake(
+                screenX - 9.0,
+                screenY - 9.0,
+                18.0,
+                18.0);
+
+        [marker setTitle:@"✈"
+                forState:UIControlStateNormal];
+
+        marker.titleLabel.font =
+            [UIFont systemFontOfSize:14.0];
+
+        [marker setTitleColor:
+            [UIColor colorWithWhite:0.15 alpha:1.0]
+            forState:UIControlStateNormal];
+
+        NSNumber *track =
+            [plane objectForKey:@"track"];
+
+        if (track)
+        {
+            double degrees =
+                [track doubleValue];
+
+            marker.transform =
+                CGAffineTransformMakeRotation(
+                    degrees * M_PI / 180.0);
+        }
+
+        [self addSubview:marker];
+    }
+}
+
+- (void)refreshWithCenterX:(double)centerX
+                   centerY:(double)centerY
+                      zoom:(NSInteger)zoom
+{
+    _centerX = centerX;
+    _centerY = centerY;
+    _zoom = zoom;
+
+    if (!_enabled ||
+        zoom < SK_AIRCRAFT_MIN_ZOOM)
+    {
+        self.hidden = YES;
+        [self clearMarkers];
+        return;
+    }
+
+    [self updateMarkers];
+
+    NSTimeInterval now =
+        [[NSDate date] timeIntervalSince1970];
+
+    /*
+     * OpenSky даёт текущие state vectors.
+     * Не опрашиваем чаще одного раза в 10 секунд.
+     */
+
+    if (_requestInFlight ||
+        now - _lastRequestTime < 10.0)
+        return;
+
+    _requestInFlight = YES;
+    _lastRequestTime = now;
+
+    /*
+     * Берём область вокруг текущего экрана.
+     */
+
+    double worldSize =
+        (double)(1 << zoom) * 256.0;
+
+    double halfX =
+        (self.bounds.size.width / 2.0) /
+        worldSize;
+
+    double halfY =
+        (self.bounds.size.height / 2.0) /
+        worldSize;
+
+    double west =
+        [self longitudeForX:
+            centerX - halfX * 1.25];
+
+    double east =
+        [self longitudeForX:
+            centerX + halfX * 1.25];
+
+    double north =
+        [self latitudeForY:
+            centerY - halfY * 1.25];
+
+    double south =
+        [self latitudeForY:
+            centerY + halfY * 1.25];
+
+    NSString *urlString =
+        [NSString stringWithFormat:
+            @"https://opensky-network.org/api/states/all"
+             "?lamin=%.6f"
+             "&lomin=%.6f"
+             "&lamax=%.6f"
+             "&lomax=%.6f",
+             south,
+             west,
+             north,
+             east];
+
+    NSURL *url =
+        [NSURL URLWithString:urlString];
+
+    NSURLRequest *request =
+        [NSURLRequest
+            requestWithURL:url
+            cachePolicy:
+                NSURLRequestReloadIgnoringLocalCacheData
+            timeoutInterval:12.0];
+
+    [NSURLConnection
+        sendAsynchronousRequest:request
+        queue:[NSOperationQueue mainQueue]
+        completionHandler:
+        ^(NSURLResponse *response,
+          NSData *data,
+          NSError *error)
+    {
+        self->_requestInFlight = NO;
+
+        if (error || !data)
+            return;
+
+        NSError *jsonError = nil;
+
+        NSDictionary *root =
+            [NSJSONSerialization
+                JSONObjectWithData:data
+                options:0
+                error:&jsonError];
+
+        if (jsonError ||
+            ![root isKindOfClass:
+                [NSDictionary class]])
+            return;
+
+        NSArray *states =
+            [root objectForKey:@"states"];
+
+        if (![states isKindOfClass:
+                [NSArray class]])
+            return;
+
+        NSMutableArray *result =
+            [NSMutableArray array];
+
+        for (NSArray *state in states)
+        {
+            if (![state isKindOfClass:
+                    [NSArray class]])
+                continue;
+
+            if ([state count] < 11)
+                continue;
+
+            NSNumber *longitude =
+                [state objectAtIndex:5];
+
+            NSNumber *latitude =
+                [state objectAtIndex:6];
+
+            NSNumber *track =
+                [state objectAtIndex:10];
+
+            if (!longitude ||
+                !latitude)
+                continue;
+
+            NSMutableDictionary *plane =
+                [NSMutableDictionary dictionary];
+
+            [plane setObject:longitude
+                      forKey:@"lon"];
+
+            [plane setObject:latitude
+                      forKey:@"lat"];
+
+            if ([track isKindOfClass:[NSNumber class]])
+            {
+                [plane setObject:track
+                          forKey:@"track"];
+            }
+
+            [result addObject:plane];
+
+            if ([result count] >=
+                SK_AIRCRAFT_MAX_COUNT)
+                break;
+        }
+
+        [self->_aircraft release];
+
+        self->_aircraft =
+            [result copy];
+
+        [self updateMarkers];
+    }];
+}
+
+/*
+ * Web Mercator helpers.
+ */
+- (double)longitudeForX:(double)x
+{
+    return x * 360.0 - 180.0;
+}
+
+- (double)latitudeForY:(double)y
+{
+    if (y < 0.0)
+        y = 0.0;
+
+    if (y > 1.0)
+        y = 1.0;
+
+    return
+        atan(
+            sinh(
+                M_PI * (1.0 - 2.0 * y)
+            )
+        ) * 180.0 / M_PI;
+}
+
+- (void)dealloc
+{
+    [_aircraft release];
+
+    [super dealloc];
+}
+
+@end
